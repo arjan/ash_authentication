@@ -30,11 +30,9 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
   @doc false
   @impl true
   def change(changeset, _opts, context) do
-    context_opts = Ash.Context.to_opts(context)
-
     case Info.strategy_for_action(changeset.resource, changeset.action.name) do
       {:ok, strategy} ->
-        do_change(changeset, strategy, context_opts, context)
+        do_change(changeset, strategy, context)
 
       :error ->
         raise AssumptionFailed,
@@ -42,7 +40,7 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
     end
   end
 
-  defp do_change(changeset, strategy, context_opts, context) do
+  defp do_change(changeset, strategy, context) do
     changeset
     |> Changeset.set_context(%{private: %{ash_authentication?: true}})
     |> Changeset.before_action(fn changeset ->
@@ -50,7 +48,7 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
       code = Changeset.get_argument(changeset, :code)
 
       with :ok <- validate_code_format(code, strategy),
-           {:ok, secret} <- verify_token_and_get_secret(setup_token, strategy, context_opts, context),
+           {:ok, secret} <- verify_token_and_get_secret(setup_token, strategy, context),
            :ok <- verify_code(secret, code, strategy) do
         changeset
         |> Changeset.force_change_attribute(strategy.secret_field, secret)
@@ -60,19 +58,19 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
           Changeset.add_error(changeset, reason)
       end
     end)
-    |> Changeset.after_action(&maybe_revoke_setup_token(&1, &2, strategy, context_opts))
+    |> Changeset.after_action(&maybe_revoke_setup_token(&1, &2, strategy, context))
     |> Changeset.after_action(&preserve_authentication_metadata/2)
   end
 
-  defp maybe_revoke_setup_token(changeset, result, strategy, context_opts) do
+  defp maybe_revoke_setup_token(changeset, result, strategy, context) do
     case changeset.context[:setup_token_to_revoke] do
       nil -> {:ok, result}
-      setup_token -> revoke_token_for_result(setup_token, result, strategy, context_opts)
+      setup_token -> revoke_token_for_result(setup_token, result, strategy, context)
     end
   end
 
-  defp revoke_token_for_result(setup_token, result, strategy, context_opts) do
-    case revoke_token(setup_token, strategy, context_opts) do
+  defp revoke_token_for_result(setup_token, result, strategy, context) do
+    case revoke_token(setup_token, strategy, context) do
       :ok -> {:ok, result}
       {:error, reason} -> {:error, reason}
     end
@@ -85,15 +83,15 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
     end
   end
 
-  defp verify_token_and_get_secret(setup_token, strategy, context_opts, context) do
+  defp verify_token_and_get_secret(setup_token, strategy, context) do
     with {:ok, %{"jti" => jti}, _resource} <-
-           Jwt.verify(setup_token, strategy.resource, context_opts, context),
+           Jwt.verify(setup_token, strategy.resource, Ash.Context.to_opts(context), context),
          {:ok, token_resource} <- Info.authentication_tokens_token_resource(strategy.resource),
          {:ok, [token_record]} <-
            TokenResource.Actions.get_token(
              token_resource,
              %{"jti" => jti, "purpose" => "totp_setup"},
-             context_opts
+             Ash.Context.to_opts(context)
            ),
          {:ok, encoded_secret} <- get_extra_data_secret(token_record) do
       case Base.decode64(encoded_secret) do
@@ -133,7 +131,7 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
     end
   end
 
-  defp revoke_token(setup_token, strategy, context_opts) do
+  defp revoke_token(setup_token, strategy, context) do
     with {:ok, token_resource} <- Info.authentication_tokens_token_resource(strategy.resource) do
       # TOTP setup tokens are always stored (with the pending secret in
       # `extra_data`) regardless of the `store_all_tokens?` flag, so we always
@@ -141,7 +139,7 @@ defmodule AshAuthentication.Strategy.Totp.ConfirmSetupChange do
       TokenResource.Actions.revoke(
         token_resource,
         setup_token,
-        Keyword.merge(context_opts, store_all_tokens?: true)
+        Keyword.merge(Ash.Context.to_opts(context), store_all_tokens?: true)
       )
     end
   end

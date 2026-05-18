@@ -28,7 +28,7 @@ defmodule AshAuthentication.Strategy.Totp.GeneratePendingSetupChange do
   def change(changeset, _opts, context) do
     case Info.strategy_for_action(changeset.resource, changeset.action.name) do
       {:ok, strategy} ->
-        do_change(changeset, strategy, Ash.Context.to_opts(context))
+        do_change(changeset, strategy, context)
 
       :error ->
         raise AssumptionFailed,
@@ -36,13 +36,13 @@ defmodule AshAuthentication.Strategy.Totp.GeneratePendingSetupChange do
     end
   end
 
-  defp do_change(changeset, strategy, context_opts) do
+  defp do_change(changeset, strategy, context) do
     changeset
     |> Changeset.set_context(%{private: %{ash_authentication?: true}})
     |> Changeset.after_action(fn _changeset, user ->
       with {:ok, secret, totp_url} <- generate_secret_and_url(user, strategy),
            {:ok, setup_token} <-
-             generate_and_store_setup_token(user, secret, strategy, context_opts) do
+             generate_and_store_setup_token(user, secret, strategy, context) do
         user =
           user
           |> Resource.put_metadata(:setup_token, setup_token)
@@ -66,9 +66,9 @@ defmodule AshAuthentication.Strategy.Totp.GeneratePendingSetupChange do
     {:ok, secret, totp_url}
   end
 
-  defp generate_and_store_setup_token(user, secret, strategy, context_opts) do
+  defp generate_and_store_setup_token(user, secret, strategy, context) do
     jwt_opts =
-      Keyword.merge(context_opts,
+      Keyword.merge(Ash.Context.to_opts(context),
         purpose: :totp_setup,
         token_lifetime: strategy.setup_token_lifetime
       )
@@ -84,7 +84,7 @@ defmodule AshAuthentication.Strategy.Totp.GeneratePendingSetupChange do
                "purpose" => "totp_setup",
                "extra_data" => %{"secret" => encoded_secret}
              },
-             context_opts
+             Ash.Context.to_opts(context)
            ) do
         :ok -> {:ok, token}
         {:error, reason} -> {:error, reason}
